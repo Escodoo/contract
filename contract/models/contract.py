@@ -81,6 +81,7 @@ class ContractContract(models.Model):
         compute="_compute_create_invoice_visibility"
     )
     date_end = fields.Date(compute="_compute_date_end", store=True, readonly=False)
+    recurring_next_date = fields.Date(inverse="_set_line_recurring_next_date")
     payment_term_id = fields.Many2one(
         comodel_name="account.payment.term", string="Payment Terms", index=True
     )
@@ -150,6 +151,23 @@ class ContractContract(models.Model):
         return records
 
     def write(self, vals):
+        line_fields = [
+            field
+            for field in ("contract_line_ids", "contract_line_fixed_ids")
+            if vals.get(field)
+        ]
+        if vals.get("recurring_next_date") and line_fields:
+            fixed_contracts = self.filtered(
+                lambda contract: not vals.get(
+                    "line_recurrence", contract.line_recurrence
+                )
+            )
+            if fixed_contracts:
+                other_contracts = self - fixed_contracts
+                if other_contracts:
+                    other_contracts.write(vals)
+                self = fixed_contracts
+                vals = self._without_line_invoice_dates(vals, line_fields)
         if "modification_ids" in vals:
             res = super(
                 ContractContract, self.with_context(bypass_modification_send=True)
@@ -158,6 +176,21 @@ class ContractContract(models.Model):
         else:
             res = super(ContractContract, self).write(vals)
         return res
+
+    def _without_line_invoice_dates(self, vals, line_fields):
+        vals = dict(vals)
+        # The form can send dates computed before the header date was entered.
+        # Let the lines recompute from the header before validating them.
+        for field in line_fields:
+            commands = []
+            for command in vals[field]:
+                if command[0] in (Command.CREATE, Command.UPDATE):
+                    values = dict(command[2])
+                    values.pop("recurring_next_date", None)
+                    command = (command[0], command[1], values)
+                commands.append(command)
+            vals[field] = commands
+        return vals
 
     @api.model
     def _set_start_contract_modification(self):
@@ -333,6 +366,19 @@ class ContractContract(models.Model):
                 super(ContractContract, contract)._compute_recurring_next_date()
             else:
                 contract.recurring_next_date = min(recurring_next_date)
+
+    def _set_line_recurring_next_date(self):
+        for contract in self.filtered(
+            lambda c: not c.line_recurrence and c.recurring_next_date
+        ):
+            lines = contract.contract_line_ids.filtered(
+                lambda line: (
+                    not line.is_canceled
+                    and (not line.display_type or line.is_recurring_note)
+                    and line.next_period_date_start
+                )
+            )
+            lines.recurring_next_date = contract.recurring_next_date
 
     @api.depends("contract_line_ids.create_invoice_visibility")
     def _compute_create_invoice_visibility(self):
