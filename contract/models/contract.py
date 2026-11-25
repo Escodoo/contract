@@ -81,7 +81,7 @@ class ContractContract(models.Model):
         compute="_compute_create_invoice_visibility"
     )
     date_end = fields.Date(compute="_compute_date_end", store=True, readonly=False)
-    recurring_next_date = fields.Date(inverse="_set_line_recurring_next_date")
+    recurring_next_date = fields.Date(inverse="_inverse_recurring_next_date")
     payment_term_id = fields.Many2one(
         comodel_name="account.payment.term", string="Payment Terms", index=True
     )
@@ -367,7 +367,7 @@ class ContractContract(models.Model):
             else:
                 contract.recurring_next_date = min(recurring_next_date)
 
-    def _set_line_recurring_next_date(self):
+    def _inverse_recurring_next_date(self):
         for contract in self.filtered(
             lambda c: not c.line_recurrence and c.recurring_next_date
         ):
