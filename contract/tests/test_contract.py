@@ -2410,6 +2410,56 @@ class TestContract(TestContractBase):
         for field in vals:
             self.assertEqual(vals[field], contract2.contract_line_ids[field])
 
+    def test_save_contract_start_and_next_invoice_date_together(self):
+        form = Form(
+            self.env["contract.contract"].with_context(default_contract_type="purchase")
+        )
+        form.name = "Supplier contract with fixed recurrence"
+        form.partner_id = self.partner
+        form.date_start = to_date("2018-02-15")
+        with form.contract_line_fixed_ids.new() as line:
+            line.product_id = self.product_1
+        contract = form.save()
+        contract.recurring_next_date = False
+
+        with self.assertRaisesRegex(ValidationError, "anterior to the start"):
+            with self.cr.savepoint():
+                form = Form(contract)
+                form.date_start = to_date("2018-03-15")
+                form.recurring_next_date = to_date("2018-03-14")
+                form.save()
+
+        form = Form(contract)
+        form.date_start = to_date("2018-03-15")
+        form.recurring_next_date = to_date("2018-03-22")
+        form.save()
+
+        self.assertEqual(contract.recurring_next_date, to_date("2018-03-22"))
+        self.assertEqual(
+            contract.contract_line_ids.recurring_next_date, contract.recurring_next_date
+        )
+        invoice = contract.recurring_create_invoice()
+        self.assertEqual(invoice.move_type, "in_invoice")
+        self.assertEqual(invoice.state, "draft")
+        self.assertEqual(invoice.invoice_date, to_date("2018-03-22"))
+        self.assertEqual(
+            contract.recurring_next_date, contract.contract_line_ids.recurring_next_date
+        )
+        self.assertGreater(contract.recurring_next_date, invoice.invoice_date)
+
+    def test_write_next_invoice_date_at_contract_level(self):
+        contract = self.contract3
+        next_invoice_date = contract.recurring_next_date + relativedelta(days=3)
+        contract.recurring_next_date = next_invoice_date
+
+        product_lines = contract.contract_line_ids.filtered(
+            lambda line: not line.display_type
+        )
+        self.assertTrue(product_lines)
+        self.assertEqual(
+            set(product_lines.mapped("recurring_next_date")), {next_invoice_date}
+        )
+
     def test_currency(self):
         currency_eur = self.env.ref("base.EUR")
         currency_cad = self.env.ref("base.CAD")
