@@ -146,7 +146,12 @@ class ContractContract(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        records = super().create(vals_list)
+        # On create, the header date is computed from the form, not chosen by
+        # the user: keep the dates of the new lines.
+        records = super(
+            ContractContract, self.with_context(contract_skip_next_date_inverse=True)
+        ).create(vals_list)
+        records = records.with_env(self.env)
         records._set_start_contract_modification()
         return records
 
@@ -368,6 +373,8 @@ class ContractContract(models.Model):
                 contract.recurring_next_date = min(recurring_next_date)
 
     def _inverse_recurring_next_date(self):
+        if self.env.context.get("contract_skip_next_date_inverse"):
+            return
         for contract in self.filtered(
             lambda c: not c.line_recurrence and c.recurring_next_date
         ):
